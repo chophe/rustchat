@@ -75,6 +75,13 @@ impl MarkdownRender {
             .join("\n")
     }
 
+    pub fn render_plain_lines(&mut self, text: &str) -> Vec<String> {
+        self.render(text)
+            .lines()
+            .map(strip_inline_ansi)
+            .collect()
+    }
+
     pub fn render_line(&self, line: &str) -> String {
         let (_, code_syntax, is_code) = self.check_line(line);
         if is_code {
@@ -302,6 +309,24 @@ fn get_code_color(theme: &Theme, truecolor: bool) -> Color {
     scope
         .and_then(|v| v.style.foreground)
         .map_or_else(|| Color::Yellow, |c| convert_color(c, truecolor))
+}
+
+fn strip_inline_ansi(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' {
+            while let Some(&next) = chars.peek() {
+                chars.next();
+                if next == 'm' {
+                    break;
+                }
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 #[cfg(test)]
