@@ -474,6 +474,28 @@ pub async fn call_chat_completions_streaming(
     }
 }
 
+pub async fn call_chat_completions_streaming_tui(
+    input: &Input,
+    client: &dyn Client,
+    abort_signal: AbortSignal,
+    tx: tokio::sync::mpsc::UnboundedSender<SseEvent>,
+) -> Result<(String, Vec<ToolResult>)> {
+    let mut handler = SseHandler::new(tx, abort_signal.clone());
+    let send_ret = client
+        .chat_completions_streaming(input, &mut handler)
+        .await;
+
+    if handler.abort().aborted() {
+        bail!("Aborted.");
+    }
+
+    let (text, tool_calls) = handler.take();
+    match send_ret {
+        Ok(_) => Ok((text, eval_tool_calls(client.global_config(), tool_calls)?)),
+        Err(err) => Err(err),
+    }
+}
+
 pub fn noop_prepare_embeddings<T>(_client: &T, _data: &EmbeddingsData) -> Result<RequestData> {
     bail!("The client doesn't support embeddings api")
 }
