@@ -81,6 +81,15 @@ pub struct Cli {
     /// List all macros
     #[clap(long)]
     pub list_macros: bool,
+    /// Launch full-screen TUI mode
+    #[clap(long)]
+    pub tui: bool,
+    /// Force legacy reedline REPL mode
+    #[clap(long)]
+    pub repl: bool,
+    /// Connect TUI to a remote rustchat serve instance
+    #[clap(long, value_name = "URL")]
+    pub tui_url: Option<String>,
     /// Input text
     #[clap(trailing_var_arg = true)]
     text: Vec<String>,
