@@ -1614,7 +1614,7 @@ impl Config {
             return Ok(());
         }
         let prelude = match self.working_mode {
-            WorkingMode::Repl => self.repl_prelude.as_ref(),
+            WorkingMode::Repl | WorkingMode::Tui => self.repl_prelude.as_ref(),
             WorkingMode::Cmd => self.cmd_prelude.as_ref(),
             WorkingMode::Serve => return Ok(()),
         };
@@ -2442,6 +2442,7 @@ pub fn load_env_file() -> Result<()> {
 pub enum WorkingMode {
     Cmd,
     Repl,
+    Tui,
     Serve,
 }
 
@@ -2452,8 +2453,14 @@ impl WorkingMode {
     pub fn is_repl(&self) -> bool {
         *self == WorkingMode::Repl
     }
+    pub fn is_tui(&self) -> bool {
+        *self == WorkingMode::Tui
+    }
     pub fn is_serve(&self) -> bool {
         *self == WorkingMode::Serve
+    }
+    pub fn is_interactive(&self) -> bool {
+        matches!(self, WorkingMode::Repl | WorkingMode::Tui)
     }
 }
 
