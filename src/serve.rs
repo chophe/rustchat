@@ -173,6 +173,12 @@ impl Server {
             self.playground_page()
         } else if path == "/arena" || path == "/arena.html" {
             self.arena_page()
+        } else if path == "/v1/tui/sessions" {
+            self.tui_sessions()
+        } else if path == "/v1/tui/chat" {
+            self.tui_chat(req).await
+        } else if path == "/v1/events" {
+            self.tui_events()
         } else {
             status = StatusCode::NOT_FOUND;
             Err(anyhow!("Not Found"))
@@ -230,6 +236,99 @@ impl Server {
         let res = Response::builder()
             .header("Content-Type", "application/json; charset=utf-8")
             .body(Full::new(Bytes::from(data.to_string())).boxed())?;
+        Ok(res)
+    }
+
+    fn tui_sessions(&self) -> Result<AppResponse> {
+        let sessions = self.config.list_sessions();
+        let res = Response::builder()
+            .header("Content-Type", "application/json; charset=utf-8")
+            .body(Full::new(Bytes::from(serde_json::to_string(&sessions)?)).boxed())?;
+        Ok(res)
+    }
+
+    fn tui_events(&self) -> Result<AppResponse> {
+        let (tx, rx) = unbounded_channel::<String>();
+        tokio::spawn(async move {
+            let _ = tx.send(r#"{"type":"session_updated"}"#.to_string());
+        });
+        let stream = UnboundedReceiverStream::new(rx).map(|data| {
+            let event = format!("data: {data}\n\n");
+            Ok::<Frame<Bytes>, Infallible>(Frame::data(Bytes::from(event)))
+        });
+        let body = StreamBody::new(stream);
+        let res = Response::builder()
+            .header("Content-Type", "text/event-stream; charset=utf-8")
+            .header("Cache-Control", "no-cache")
+            .body(BodyExt::boxed(body))?;
+        Ok(res)
+    }
+
+    async fn tui_chat(&self, req: hyper::Request<Incoming>) -> Result<AppResponse> {
+        #[derive(Deserialize)]
+        struct TuiChatBody {
+            message: String,
+        }
+
+        let req_body = req.collect().await?.to_bytes();
+        let body: TuiChatBody = serde_json::from_slice(&req_body)
+            .map_err(|err| anyhow!("Invalid TUI chat request, {err}"))?;
+
+        let config = Arc::new(RwLock::new(self.config.clone()));
+        let (tx, rx) = unbounded_channel::<String>();
+
+        tokio::spawn(async move {
+            let abort_signal = create_abort_signal();
+            let input = Input::from_str(&config, &body.message, None);
+            let tx = tx;
+
+            let result = async {
+                let client = input.create_client()?;
+                config.write().before_chat_completion(&input)?;
+                let (sse_tx, mut sse_rx) = unbounded_channel();
+                let event_tx = tx.clone();
+                let forward = tokio::spawn(async move {
+                    while let Some(event) = sse_rx.recv().await {
+                        match event {
+                            SseEvent::Text(text) => {
+                                let _ = event_tx.send(
+                                    json!({"type":"stream_delta","text": text}).to_string(),
+                                );
+                            }
+                            SseEvent::Done => break,
+                        }
+                    }
+                });
+                let (output, tool_results) = call_chat_completions_streaming_tui(
+                    &input,
+                    client.as_ref(),
+                    abort_signal,
+                    sse_tx,
+                )
+                .await?;
+                let _ = forward.await;
+                config
+                    .write()
+                    .after_chat_completion(&input, &output, &tool_results)?;
+                let _ = tx.send(json!({"type":"done","text": output}).to_string());
+                Ok::<(), anyhow::Error>(())
+            }
+            .await;
+
+            if let Err(err) = result {
+                let _ = tx.send(json!({"type":"error","message": err.to_string()}).to_string());
+            }
+        });
+
+        let stream = UnboundedReceiverStream::new(rx).map(|data| {
+            let event = format!("data: {data}\n\n");
+            Ok::<Frame<Bytes>, Infallible>(Frame::data(Bytes::from(event)))
+        });
+        let body = StreamBody::new(stream);
+        let res = Response::builder()
+            .header("Content-Type", "text/event-stream; charset=utf-8")
+            .header("Cache-Control", "no-cache")
+            .body(BodyExt::boxed(body))?;
         Ok(res)
     }
 
