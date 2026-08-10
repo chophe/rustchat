@@ -6,6 +6,7 @@ mod rag;
 mod render;
 mod repl;
 mod serve;
+mod tui;
 #[macro_use]
 mod utils;
 
@@ -38,7 +39,9 @@ async fn main() -> Result<()> {
     let text = cli.text()?;
     let working_mode = if cli.serve.is_some() {
         WorkingMode::Serve
-    } else if text.is_none() && cli.file.is_empty() {
+    } else if cli.tui || (cli.tui_url.is_some() && text.is_none() && cli.file.is_empty()) {
+        WorkingMode::Tui
+    } else if cli.repl || (text.is_none() && cli.file.is_empty()) {
         WorkingMode::Repl
     } else {
         WorkingMode::Cmd
@@ -160,10 +163,10 @@ async fn run(config: GlobalConfig, cli: Cli, text: Option<String>) -> Result<()>
     if let Some(addr) = cli.serve {
         return serve::run(config, addr).await;
     }
-    let is_repl = config.read().working_mode.is_repl();
+    let is_interactive = config.read().working_mode.is_interactive();
     if cli.rebuild_rag {
         Config::rebuild_rag(&config, abort_signal.clone()).await?;
-        if is_repl {
+        if is_interactive {
             return Ok(());
         }
     }
@@ -171,23 +174,31 @@ async fn run(config: GlobalConfig, cli: Cli, text: Option<String>) -> Result<()>
         macro_execute(&config, name, text.as_deref(), abort_signal.clone()).await?;
         return Ok(());
     }
-    if cli.execute && !is_repl {
+    if cli.execute && !is_interactive {
         let input = create_input(&config, text, &cli.file, abort_signal.clone()).await?;
         shell_execute(&config, &SHELL, input, abort_signal.clone()).await?;
         return Ok(());
     }
     config.write().apply_prelude()?;
-    match is_repl {
-        false => {
-            let mut input = create_input(&config, text, &cli.file, abort_signal.clone()).await?;
-            input.use_embeddings(abort_signal.clone()).await?;
-            start_directive(&config, input, cli.code, abort_signal).await
+    let is_tui = config.read().working_mode.is_tui();
+    let is_repl = config.read().working_mode.is_repl();
+    match (is_tui, is_repl) {
+        (true, _) => {
+            if !*IS_STDOUT_TERMINAL {
+                bail!("No TTY for TUI")
+            }
+            tui::run(config, cli.tui_url).await
         }
-        true => {
+        (_, true) => {
             if !*IS_STDOUT_TERMINAL {
                 bail!("No TTY for REPL")
             }
             start_interactive(&config).await
+        }
+        _ => {
+            let mut input = create_input(&config, text, &cli.file, abort_signal.clone()).await?;
+            input.use_embeddings(abort_signal.clone()).await?;
+            start_directive(&config, input, cli.code, abort_signal).await
         }
     }
 }
