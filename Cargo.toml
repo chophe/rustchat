@@ -1,12 +1,12 @@
 [package]
-name = "aichat"
+name = "rustchat"
 version = "0.30.0"
 edition = "2021"
 authors = ["sigoden <sigoden@gmail.com>"]
 description = "All-in-one LLM CLI Tool"
 license = "MIT OR Apache-2.0"
-homepage = "https://github.com/sigoden/aichat"
-repository = "https://github.com/sigoden/aichat"
+homepage = "https://github.com/chophe/rustchat"
+repository = "https://github.com/chophe/rustchat"
 categories = ["command-line-utilities"]
 keywords = ["chatgpt", "llm", "cli", "ai", "repl"]
 
@@ -68,6 +68,8 @@ which = "8.0.0"
 fuzzy-matcher = "0.3.7"
 terminal-colorsaurus = "0.4.8"
 duct = "1.0.0"
+ratatui = { version = "0.29", default-features = false, features = ["crossterm"] }
+tui-textarea = "0.7"
 
 [dependencies.reqwest]
 version = "0.12.0"
