@@ -66,6 +66,32 @@ impl PaletteCommand {
     }
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct DialogStack(Vec<DialogKind>);
+
+impl DialogStack {
+    pub fn push(&mut self, dialog: DialogKind) {
+        self.0.push(dialog);
+    }
+
+    pub fn pop(&mut self) -> Option<DialogKind> {
+        self.0.pop()
+    }
+
+    pub fn top(&self) -> Option<&DialogKind> {
+        self.0.last()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    #[cfg(test)]
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+}
+
 pub fn render_dialog(f: &mut Frame, area: Rect, state: &AppState, dialog: &DialogKind) {
     let (title, lines) = match dialog {
         DialogKind::Palette => {
@@ -133,9 +159,9 @@ pub fn render_dialog(f: &mut Frame, area: Rect, state: &AppState, dialog: &Dialo
     };
 
     let height = (lines.len() as u16 + 4).min(area.height.saturating_sub(2)).max(5);
-    let width = area.width.saturating_sub(4).max(20);
-    let x = (area.width - width) / 2;
-    let y = (area.height - height) / 2;
+    let width = area.width.saturating_sub(4).max(20).min(area.width);
+    let x = area.width.saturating_sub(width) / 2;
+    let y = area.height.saturating_sub(height) / 2;
     let dialog_area = Rect::new(x, y, width, height);
 
     f.render_widget(Clear, dialog_area);
@@ -149,4 +175,36 @@ pub fn render_dialog(f: &mut Frame, area: Rect, state: &AppState, dialog: &Dialo
         .wrap(Wrap { trim: false })
         .style(Style::default().bg(state.theme.bg).fg(state.theme.fg));
     f.render_widget(widget, dialog_area);
+}
+
+#[cfg(test)]
+mod stack_tests {
+    use super::*;
+
+    #[test]
+    fn push_pop_top() {
+        let mut stack = DialogStack::default();
+        assert!(stack.is_empty());
+        stack.push(DialogKind::Help);
+        stack.push(DialogKind::ModelPicker);
+        assert_eq!(stack.len(), 2);
+        assert!(matches!(stack.top(), Some(DialogKind::ModelPicker)));
+        let popped = stack.pop().unwrap();
+        assert!(matches!(popped, DialogKind::ModelPicker));
+        assert!(matches!(stack.top(), Some(DialogKind::Help)));
+        let _ = stack.pop().unwrap();
+        assert!(stack.is_empty());
+    }
+
+    #[test]
+    fn esc_pops_top_first() {
+        let mut stack = DialogStack::default();
+        stack.push(DialogKind::Help);
+        stack.push(DialogKind::Palette);
+        // Top dialog handles Esc first
+        if matches!(stack.top(), Some(DialogKind::Palette)) {
+            let _ = stack.pop();
+        }
+        assert!(matches!(stack.top(), Some(DialogKind::Help)));
+    }
 }

@@ -86,7 +86,9 @@ impl ChatBackend for RemoteBackend {
         let event_tx = self.event_tx.clone();
         let body = serde_json::json!({ "message": text });
 
-        let handle = tokio::spawn(async move {
+        // Fire-and-forget: the spawned task pushes events onto the channel as
+        // they arrive, and the main loop keeps rendering between tokens.
+        tokio::spawn(async move {
             let builder = client.post(&url).json(&body);
             let mut es = match builder.eventsource() {
                 Ok(es) => es,
@@ -136,7 +138,6 @@ impl ChatBackend for RemoteBackend {
             }
         });
 
-        let _ = handle.await;
         Ok(())
     }
 

@@ -1,82 +1,61 @@
-use crate::tui::state::{AppState, MessageView};
+use crate::tui::state::{AppState, Route};
 use ratatui::{
     style::Style,
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Wrap},
+    widgets::{Block, Borders, Paragraph, Widget},
     Frame,
 };
 
-pub fn render_messages(f: &mut Frame, area: ratatui::layout::Rect, state: &AppState) {
-    let mut lines: Vec<Line> = Vec::new();
-
-    if state.route == crate::tui::state::Route::Home {
-        lines.push(Line::from(Span::styled(
+/// Renders the messages zone from the append-only `Scrollback` line cache.
+///
+/// Only the lines visible in the viewport are written into the frame buffer,
+/// so the per-frame cost is bounded by the terminal height — not by the length
+/// of the transcript.
+pub fn render_messages(f: &mut Frame, area: ratatui::layout::Rect, state: &mut AppState) {
+    if state.route == Route::Home {
+        let widget = Paragraph::new(Line::from(Span::styled(
             "RustChat TUI — press Ctrl+N for new session, Ctrl+P for command palette",
             Style::default().fg(state.theme.accent),
-        )));
-    }
-
-    for message in &state.messages {
-        lines.extend(render_message(message, state));
-        lines.push(Line::from(""));
-    }
-
-    if lines.is_empty() {
-        lines.push(Line::from(Span::styled(
-            "No messages yet. Type below to start chatting.",
-            Style::default().fg(state.theme.dim),
-        )));
-    }
-
-    let height = lines.len().max(1) as u16;
-    let max_scroll = height.saturating_sub(area.height.saturating_sub(2));
-    let scroll = if state.scroll == u16::MAX {
-        max_scroll
-    } else {
-        state.scroll.min(max_scroll)
-    };
-
-    let widget = Paragraph::new(lines)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" Messages ")
-                .border_style(state.theme.prompt_border),
-        )
-        .wrap(Wrap { trim: false })
-        .scroll((scroll, 0))
+        )))
         .style(Style::default().bg(state.theme.bg).fg(state.theme.fg));
+        f.render_widget(widget, area);
+        return;
+    }
 
-    f.render_widget(widget, area);
-}
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Messages ")
+        .border_style(state.theme.prompt_border)
+        .style(Style::default().bg(state.theme.bg));
+    let inner = block.inner(area);
 
-fn render_message(message: &MessageView, state: &AppState) -> Vec<Line<'static>> {
-    let label_style = match message.role {
-        crate::client::MessageRole::User => state.theme.user_label,
-        crate::client::MessageRole::Assistant => state.theme.assistant_label,
-        crate::client::MessageRole::System => state.theme.system_label,
-        crate::client::MessageRole::Tool => state.theme.system_label,
-    };
+    let width = inner.width.max(1) as usize;
+    state.scrollback.prepare(&state.theme, width);
 
-    let mut lines = vec![Line::from(vec![
-        Span::styled(format!("[{}]", message.label()), label_style),
-        if message.streaming {
-            Span::styled(" ●", Style::default().fg(state.theme.accent))
+    {
+        let buf = f.buffer_mut();
+        block.render(area, buf);
+
+        let total = state.scrollback.line_count();
+        if total == 0 {
+            let hint = Line::from(Span::styled(
+                "No messages yet. Type below to start chatting.",
+                Style::default().fg(state.theme.dim).bg(state.theme.bg),
+            ));
+            buf.set_line(inner.x, inner.y, &hint, inner.width);
+            return;
+        }
+
+        let viewport = inner.height.max(1) as usize;
+        let max_scroll = total.saturating_sub(viewport);
+        let scroll = if state.scroll == u16::MAX {
+            max_scroll
         } else {
-            Span::raw("")
-        },
-    ])];
+            (state.scroll as usize).min(max_scroll)
+        };
 
-    for line in message.text.lines() {
-        lines.push(Line::from(line.to_string()));
+        for (i, line) in state.scrollback.visible_lines(scroll, viewport).into_iter().enumerate() {
+            buf.set_line(inner.x, inner.y + i as u16, line, inner.width);
+        }
     }
-
-    for tool in &message.tool_calls {
-        lines.push(Line::from(Span::styled(
-            format!("  tool: {}({})", tool.name, tool.arguments),
-            Style::default().fg(state.theme.dim),
-        )));
-    }
-
-    lines
 }

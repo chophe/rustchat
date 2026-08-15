@@ -1,6 +1,7 @@
 use crate::config::GlobalConfig;
 use crate::tui::backend::{create_backend, Backend, ChatBackend};
-use crate::tui::event::{AppEvent, BackendEvent, KeyAction};
+use crate::tui::event::{AppEvent, BackendEvent, Focus, KeyAction};
+use crate::tui::footer::FooterMode;
 use crate::tui::kv::TuiPreferences;
 use crate::tui::routes::{home, session};
 use crate::tui::state::AppState;
@@ -93,14 +94,15 @@ async fn run_loop(
     backend_rx: &mut UnboundedReceiver<crate::tui::event::BackendEvent>,
     input_rx: &mut UnboundedReceiver<AppEvent>,
 ) -> Result<()> {
-    let mut tick = tokio::time::interval(Duration::from_millis(50));
+    // ~30fps tick drives the spinner, toasts and the interrupt window.
+    let mut tick = tokio::time::interval(Duration::from_millis(33));
 
     loop {
-        terminal.draw(|f| render(f, state))?;
+        terminal.draw(|f| render(f, &mut *state))?;
 
         tokio::select! {
             _ = tick.tick() => {
-                state.tick_toast();
+                state.tick();
             }
             Some(app_event) = input_rx.recv() => {
                 if handle_app_event(state, backend, app_event).await? {
@@ -126,39 +128,69 @@ async fn handle_app_event(
 ) -> Result<bool> {
     match event {
         AppEvent::Input(key) => {
-            if state.dialog.is_some() {
+            if !state.dialog_stack.is_empty() {
                 return handle_dialog_input(state, backend, key).await;
             }
 
-            if state.focus == Focus::Prompt {
-                if should_pass_to_textarea(key) {
-                    state.textarea.input(tui_textarea::Input::from(key));
+            // Footer modal modes consume all keys until answered.
+            let permission = matches!(state.footer_mode, FooterMode::Permission { .. });
+            let question_len = match &state.footer_mode {
+                FooterMode::Question { options, .. } => Some(options.len()),
+                _ => None,
+            };
+            if permission {
+                use crossterm::event::KeyCode;
+                match key.code {
+                    KeyCode::Char('y') | KeyCode::Char('Y') => state.resolve_permission(true),
+                    KeyCode::Char('n') | KeyCode::Char('N') => state.resolve_permission(false),
+                    KeyCode::Esc => state.resolve_permission(false),
+                    _ => {}
                 }
+                return Ok(false);
+            }
+            if let Some(len) = question_len {
+                use crossterm::event::KeyCode;
+                match key.code {
+                    KeyCode::Char(c) if c.is_ascii_digit() => {
+                        let n = c.to_digit(10).unwrap_or(0) as usize;
+                        if n >= 1 && n <= len {
+                            state.resolve_question(Some(n - 1));
+                        }
+                    }
+                    KeyCode::Esc => state.resolve_question(None),
+                    _ => {}
+                }
+                return Ok(false);
+            }
+
+            if state.focus == Focus::Prompt && should_pass_to_textarea(state, key) {
+                state.textarea.input(tui_textarea::Input::from(key));
+                state.autocomplete.on_input(&state.textarea);
             }
 
             match state.map_key(key) {
                 KeyAction::Quit => return Ok(true),
                 KeyAction::Submit => {
                     let text = state.textarea.lines().join("\n");
-                    if text.trim().starts_with('.') || !text.trim().is_empty() {
-                        if !text.trim().starts_with('.') {
+                    let trimmed = text.trim();
+                    if !trimmed.is_empty() {
+                        let is_command = trimmed.starts_with('.');
+                        state.suppress_rebuild = false;
+                        if !is_command {
                             state.push_user_message(text.clone());
+                            state.begin_streaming();
                         }
-                        state.textarea = tui_textarea::TextArea::default();
-                        state.textarea.set_placeholder_text(
-                            "Type a message... (Enter submit, Shift+Enter newline, Esc abort, Ctrl+P palette)",
-                        );
-                        state.streaming = true;
+                        reset_textarea(state);
                         backend.send_message(&text).await?;
                     }
                 }
                 KeyAction::NewLine => {
                     state.textarea.insert_newline();
+                    state.autocomplete.on_input(&state.textarea);
                 }
                 KeyAction::Abort => {
                     backend.abort();
-                    state.streaming = false;
-                    state.status = "aborted".into();
+                    state.begin_abort();
                 }
                 KeyAction::ScrollUp => {
                     state.auto_scroll = false;
@@ -202,17 +234,32 @@ async fn handle_app_event(
                 }
                 KeyAction::OpenHelp => state.open_dialog(DialogKind::Help),
                 KeyAction::GoHome => home::render_home_hint(state),
-                KeyAction::CloseDialog => state.close_dialog(),
                 KeyAction::None => {}
             }
         }
         AppEvent::Resize(_, _) => {}
-        AppEvent::Mouse(_) => {}
+        AppEvent::Mouse(event) => handle_mouse(state, event),
         AppEvent::Backend(event) => handle_backend_event(state, backend, event),
-        AppEvent::Tick => state.tick_toast(),
+        AppEvent::Tick => state.tick(),
         AppEvent::Quit => return Ok(true),
     }
     Ok(false)
+}
+
+fn handle_mouse(state: &mut AppState, event: crossterm::event::MouseEvent) {
+    use crossterm::event::MouseEventKind;
+    // Wheel scroll with a small per-notch multiplier for a more natural feel.
+    const WHEEL_STEP: u16 = 3;
+    match event.kind {
+        MouseEventKind::ScrollUp => {
+            state.auto_scroll = false;
+            state.scroll = state.scroll.saturating_sub(WHEEL_STEP);
+        }
+        MouseEventKind::ScrollDown => {
+            state.scroll = state.scroll.saturating_add(WHEEL_STEP);
+        }
+        _ => {}
+    }
 }
 
 async fn handle_dialog_input(
@@ -222,7 +269,8 @@ async fn handle_dialog_input(
 ) -> Result<bool> {
     use crossterm::event::{KeyCode, KeyModifiers};
 
-    match &state.dialog {
+    let top = state.dialog_stack.top().cloned();
+    match top {
         Some(DialogKind::Palette) => match (key.code, key.modifiers) {
             (KeyCode::Esc, _) => state.close_dialog(),
             (KeyCode::Down, _) => {
@@ -267,7 +315,7 @@ async fn handle_dialog_input(
         Some(DialogKind::SessionList)
         | Some(DialogKind::ModelPicker)
         | Some(DialogKind::RolePicker) => {
-            let kind = state.dialog.clone();
+            let kind = state.dialog_stack.top().cloned();
             match key.code {
                 KeyCode::Esc => state.close_dialog(),
                 KeyCode::Down => {
@@ -302,6 +350,7 @@ async fn handle_dialog_input(
                             _ => {}
                         }
                         state.close_dialog();
+                        state.suppress_rebuild = false;
                         session::sync_from_backend(state, backend);
                     }
                 }
@@ -362,8 +411,23 @@ fn handle_backend_event(
     session::sync_from_backend(state, backend);
 }
 
-fn should_pass_to_textarea(key: crossterm::event::KeyEvent) -> bool {
+fn reset_textarea(state: &mut AppState) {
+    state.textarea = tui_textarea::TextArea::default();
+    state.textarea.set_placeholder_text(
+        "Type a message... (Enter submit, Shift+Enter newline, Esc abort, Ctrl+P palette)",
+    );
+}
+
+fn should_pass_to_textarea(state: &AppState, key: crossterm::event::KeyEvent) -> bool {
     use crossterm::event::{KeyCode, KeyModifiers};
+
+    // While the autocomplete popup is open, Tab / Shift-Tab are reserved for
+    // cycling candidates instead of inserting literal tab characters.
+    if state.autocomplete.is_open()
+        && matches!((key.code, key.modifiers), (KeyCode::Tab, _) | (KeyCode::BackTab, _))
+    {
+        return false;
+    }
 
     !matches!(
         (key.code, key.modifiers),
@@ -381,5 +445,3 @@ fn should_pass_to_textarea(key: crossterm::event::KeyEvent) -> bool {
             | (KeyCode::Esc, _)
     )
 }
-
-use crate::tui::event::Focus;

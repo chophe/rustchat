@@ -18,6 +18,13 @@ pub enum BackendEvent {
     Done { text: String },
     Error(String),
     Info(String),
+    /// A backend turn needs an explicit approval before continuing.
+    /// No backend emits this yet; the plumbing is in place for future ones.
+    #[allow(dead_code)]
+    PermissionRequest { prompt: String },
+    /// A backend turn needs the user to pick one of several options.
+    #[allow(dead_code)]
+    Question { prompt: String, options: Vec<String> },
     SessionUpdated,
     Exit,
 }
@@ -49,6 +56,5 @@ pub enum KeyAction {
     OpenRolePicker,
     OpenHelp,
     GoHome,
-    CloseDialog,
     None,
 }

@@ -75,6 +75,23 @@ impl MarkdownRender {
             .join("\n")
     }
 
+    /// Render `text` starting from a clean line state, so code-fence and
+    /// syntax state never leak between separately rendered blocks.
+    ///
+    /// Used by the TUI scrollback to re-render a finalized message with the
+    /// desired wrap width without carrying state over from a previous message.
+    pub fn render_reset(&mut self, text: &str, wrap_width: Option<u16>) -> String {
+        let prev_wrap = self.wrap_width;
+        self.wrap_width = wrap_width;
+        self.prev_line_type = LineType::Normal;
+        self.code_syntax = None;
+        let out = self.render(text);
+        self.prev_line_type = LineType::Normal;
+        self.code_syntax = None;
+        self.wrap_width = prev_wrap;
+        out
+    }
+
     pub fn render_plain_lines(&mut self, text: &str) -> Vec<String> {
         self.render(text)
             .lines()

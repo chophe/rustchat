@@ -49,6 +49,15 @@ pub const TEMP_SESSION_NAME: &str = "temp";
 const DARK_THEME: &[u8] = include_bytes!("../../assets/monokai-extended.theme.bin");
 const LIGHT_THEME: &[u8] = include_bytes!("../../assets/monokai-extended-light.theme.bin");
 
+/// Decode a built-in syntect syntax highlighting theme.
+///
+/// Exposed for the TUI scrollback so it can reuse the same embedded themes as
+/// the REPL without duplicating the assets.
+pub fn builtin_syntax_theme(light: bool) -> anyhow::Result<syntect::highlighting::Theme> {
+    let data = if light { LIGHT_THEME } else { DARK_THEME };
+    decode_bin(data).with_context(|| "Invalid builtin syntax theme")
+}
+
 const CONFIG_FILE_NAME: &str = "config.yaml";
 const ROLES_DIR_NAME: &str = "roles";
 const MACROS_DIR_NAME: &str = "macros";
