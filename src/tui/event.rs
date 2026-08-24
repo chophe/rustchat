@@ -5,10 +5,7 @@ use crossterm::event::{KeyEvent, MouseEvent};
 pub enum AppEvent {
     Input(KeyEvent),
     Mouse(MouseEvent),
-    Resize(u16, u16),
-    Backend(BackendEvent),
-    Tick,
-    Quit,
+    Resize,
 }
 
 #[derive(Debug, Clone)]

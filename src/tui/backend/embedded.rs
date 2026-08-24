@@ -73,7 +73,7 @@ impl EmbeddedBackend {
         config: &GlobalConfig,
         abort_signal: &AbortSignal,
         event_tx: &UnboundedSender<BackendEvent>,
-        mut input: Input,
+        input: Input,
     ) -> Result<()> {
         let client = input.create_client()?;
         config.write().before_chat_completion(&input)?;

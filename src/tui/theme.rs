@@ -23,7 +23,6 @@ pub struct Theme {
     pub dialog_border: Style,
     pub accent: Color,
     pub dim: Color,
-    pub error: Color,
     pub toast: Style,
 }
 
@@ -62,7 +61,6 @@ impl Theme {
             dialog_border: Style::default().fg(Color::Rgb(120, 120, 180)),
             accent: Color::Rgb(130, 170, 255),
             dim: Color::Rgb(120, 120, 120),
-            error: Color::Red,
             toast: Style::default().fg(Color::Rgb(200, 200, 255)),
         }
     }
@@ -90,7 +88,6 @@ impl Theme {
             dialog_border: Style::default().fg(Color::Rgb(100, 100, 160)),
             accent: Color::Rgb(50, 80, 200),
             dim: Color::Rgb(130, 130, 130),
-            error: Color::Red,
             toast: Style::default().fg(Color::Rgb(40, 40, 100)),
         }
     }

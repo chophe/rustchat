@@ -14,7 +14,6 @@ pub enum DialogKind {
     ModelPicker,
     RolePicker,
     Help,
-    ShellConfirm { command: String },
 }
 
 #[derive(Debug, Clone)]
@@ -148,15 +147,7 @@ pub fn render_dialog(f: &mut Frame, area: Rect, state: &AppState, dialog: &Dialo
                 Line::from(".help .model .role .session .exit"),
             ],
         ),
-        DialogKind::ShellConfirm { command } => (
-            " Confirm Shell Command ",
-            vec![
-                Line::from("Execute this command?"),
-                Line::from(Span::styled(command.as_str(), Style::default().fg(state.theme.accent))),
-                Line::from("y: execute  n: cancel"),
-            ],
-        ),
-    };
+        };
 
     let height = (lines.len() as u16 + 4).min(area.height.saturating_sub(2)).max(5);
     let width = area.width.saturating_sub(4).max(20).min(area.width);

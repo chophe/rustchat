@@ -75,8 +75,8 @@ fn spawn_input_reader(tx: UnboundedSender<AppEvent>) {
                         break;
                     }
                 }
-                Ok(Event::Resize(w, h)) => {
-                    if tx.send(AppEvent::Resize(w, h)).is_err() {
+                Ok(Event::Resize(_w, _h)) => {
+                    if tx.send(AppEvent::Resize).is_err() {
                         break;
                     }
                 }
@@ -237,11 +237,8 @@ async fn handle_app_event(
                 KeyAction::None => {}
             }
         }
-        AppEvent::Resize(_, _) => {}
+        AppEvent::Resize => {}
         AppEvent::Mouse(event) => handle_mouse(state, event),
-        AppEvent::Backend(event) => handle_backend_event(state, backend, event),
-        AppEvent::Tick => state.tick(),
-        AppEvent::Quit => return Ok(true),
     }
     Ok(false)
 }
@@ -304,13 +301,6 @@ async fn handle_dialog_input(
                 state.palette_selected = 0;
             }
             _ => {}
-        },
-        Some(DialogKind::ShellConfirm { command }) => match key.code {
-            KeyCode::Char('y') | KeyCode::Char('Y') => {
-                state.show_toast(format!("Would execute: {command}"));
-                state.close_dialog();
-            }
-            _ => state.close_dialog(),
         },
         Some(DialogKind::SessionList)
         | Some(DialogKind::ModelPicker)
