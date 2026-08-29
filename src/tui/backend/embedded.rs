@@ -191,17 +191,46 @@ impl EmbeddedBackend {
 #[async_trait]
 impl ChatBackend for EmbeddedBackend {
     fn list_sessions(&self) -> Result<Vec<SessionMeta>> {
-        Ok(self
-            .config
-            .read()
+        let config = self.config.read();
+        let dir = config.sessions_dir();
+        Ok(config
             .list_sessions()
             .into_iter()
-            .map(|name| SessionMeta { name })
+            .map(|name| {
+                let updated = std::fs::metadata(config.session_file(&name))
+                    .and_then(|m| m.modified())
+                    .ok()
+                    .or_else(|| {
+                        // Autoname sessions live under the `_` subdirectory.
+                        std::fs::metadata(dir.join("_").join(format!("{name}.yaml")))
+                            .and_then(|m| m.modified())
+                            .ok()
+                    });
+                SessionMeta { name, updated }
+            })
             .collect())
     }
 
     fn load_session(&mut self, name: &str) -> Result<()> {
         self.config.write().use_session(Some(name))
+    }
+
+    fn delete_session(&mut self, name: &str) -> Result<()> {
+        let path = self.config.read().session_file(name);
+        if path.exists() {
+            std::fs::remove_file(&path)?;
+        }
+        // If the deleted session is the active one, fall back to a temp session.
+        let current = self
+            .config
+            .read()
+            .session
+            .as_ref()
+            .map(|s| s.name().to_string());
+        if current.as_deref() == Some(name) {
+            self.config.write().use_session(None)?;
+        }
+        Ok(())
     }
 
     async fn send_message(&mut self, text: &str) -> Result<()> {

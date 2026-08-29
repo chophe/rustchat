@@ -40,18 +40,7 @@ pub fn render_hints(f: &mut Frame, area: ratatui::layout::Rect, state: &AppState
 
     let widget = Paragraph::new(Line::from(Span::styled(
         text,
-        Style::default().bg(state.theme.status_bg).fg(state.theme.status_fg),
-    )))
-    .alignment(Alignment::Left);
-    f.render_widget(widget, area);
-}
-
-/// Row 4 of the footer: static keybinding bar.
-pub fn render_keybar(f: &mut Frame, area: ratatui::layout::Rect, state: &AppState) {
-    let text = "Ctrl+P palette  Ctrl+B sidebar  Ctrl+S sessions  Ctrl+M model  Ctrl+R role  Ctrl+H help  Ctrl+N home  Esc Esc quit/stop";
-    let widget = Paragraph::new(Line::from(Span::styled(
-        text,
-        Style::default().bg(state.theme.status_bg).fg(state.theme.dim),
+        Style::default().bg(state.theme.bg).fg(state.theme.muted),
     )))
     .alignment(Alignment::Left);
     f.render_widget(widget, area);

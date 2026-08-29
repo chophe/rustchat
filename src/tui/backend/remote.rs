@@ -2,7 +2,7 @@ use super::{ChatBackend, SessionMeta};
 use crate::tui::event::BackendEvent;
 use crate::tui::state::MessageView;
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use reqwest_eventsource::{Event, RequestBuilderExt};
@@ -53,7 +53,10 @@ impl RemoteBackend {
         let url = format!("{}/v1/tui/sessions", self.base_url);
         let resp = self.client.get(&url).send().await?;
         let names: Vec<String> = resp.json().await?;
-        Ok(names.into_iter().map(|name| SessionMeta { name }).collect())
+        Ok(names
+            .into_iter()
+            .map(|name| SessionMeta { name, updated: None })
+            .collect())
     }
 }
 
@@ -68,6 +71,10 @@ impl ChatBackend for RemoteBackend {
     fn load_session(&mut self, name: &str) -> Result<()> {
         self.header_left = format!("session:{name}");
         Ok(())
+    }
+
+    fn delete_session(&mut self, _name: &str) -> Result<()> {
+        bail!("delete_session is not supported by the remote backend")
     }
 
     async fn send_message(&mut self, text: &str) -> Result<()> {

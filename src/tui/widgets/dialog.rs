@@ -3,11 +3,11 @@ use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph, Wrap},
+    widgets::{Clear, Paragraph},
     Frame,
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DialogKind {
     Palette,
     SessionList,
@@ -91,81 +91,242 @@ impl DialogStack {
     }
 }
 
+/// A single selectable row in a dialog. `header` rows render as violet section
+/// titles; `selected` rows render with a full-row primary (peach) highlight.
+struct DialogRow {
+    label: String,
+    hint: Option<&'static str>,
+    header: bool,
+    selected: bool,
+}
+
+/// Renders an opencode-style flat modal: no box borders, panel background,
+/// bold title + dim `esc`, optional search field, violet section headers,
+/// full-row peach selection highlight, right-aligned keybinding hints, and a
+/// dimmed scrim behind the panel.
 pub fn render_dialog(f: &mut Frame, area: Rect, state: &AppState, dialog: &DialogKind) {
-    let (title, lines) = match dialog {
-        DialogKind::Palette => {
-            let mut lines = vec![Line::from(Span::styled(
-                "Type to filter, Enter to select, Esc to close",
-                Style::default().fg(state.theme.dim),
-            ))];
-            for (i, cmd) in state.filtered_palette_commands().iter().enumerate() {
-                let prefix = if i == state.palette_selected {
-                    "> "
-                } else {
-                    "  "
-                };
-                lines.push(Line::from(vec![
-                    Span::raw(prefix),
-                    Span::styled(
-                        format!("{} ", cmd.title),
-                        if i == state.palette_selected {
-                            Style::default().add_modifier(Modifier::BOLD)
-                        } else {
-                            Style::default()
-                        },
-                    ),
-                    Span::styled(
-                        format!("({})", cmd.category),
-                        Style::default().fg(state.theme.dim),
-                    ),
-                ]));
-            }
-            (" Command Palette ", lines)
-        }
-        DialogKind::SessionList => (
-            " Sessions ",
-            state
-                .sidebar_lines
-                .iter()
-                .map(|s| Line::from(s.as_str()))
-                .collect(),
-        ),
-        DialogKind::ModelPicker => (
-            " Models ",
-            vec![Line::from("Use .model <name> or select from list")],
-        ),
-        DialogKind::RolePicker => (
-            " Roles ",
-            vec![Line::from("Use .role <name> or select from list")],
-        ),
-        DialogKind::Help => (
-            " Help ",
-            vec![
-                Line::from("Enter: submit  Shift+Enter: newline  Esc: abort/close"),
-                Line::from("Ctrl+P: palette  Ctrl+B: sidebar  Ctrl+N: home"),
-                Line::from("Ctrl+S: sessions  Ctrl+M: models  Ctrl+R: roles"),
-                Line::from(".help .model .role .session .exit"),
-            ],
-        ),
+    let (title, rows, search) = dialog_rows(state, dialog);
+
+    // --- Compute panel geometry before building padded lines ---
+    let max_label = rows.iter().map(|r| r.label.chars().count()).max().unwrap_or(0);
+    let max_hint = rows.iter().filter_map(|r| r.hint).map(|h| h.chars().count()).max().unwrap_or(0);
+    let pad = 4;
+    let needed = max_label + if max_hint > 0 { 3 + max_hint } else { 0 } + pad;
+    let width = needed
+        .min(area.width as usize)
+        .max(1) as u16;
+    let inner_w = width.saturating_sub(4) as usize;
+
+    // --- Scrim (dim the whole screen behind the panel) ---
+    let scrim = Paragraph::new("")
+        .style(Style::default().bg(state.theme.panel_bg));
+    f.render_widget(Clear, area);
+    f.render_widget(scrim, area);
+
+    // --- Build the body lines (header + search + rows) ---
+    let mut body: Vec<Line> = Vec::new();
+    let title_w = title.chars().count();
+    body.push(Line::from(vec![
+        Span::styled(&title, Style::default().fg(state.theme.fg).add_modifier(Modifier::BOLD)),
+        Span::raw(" ".repeat(inner_w.saturating_sub(title_w).max(1))),
+        Span::styled("esc", Style::default().fg(state.theme.muted)),
+    ]));
+
+    if let Some(q) = search {
+        body.push(Line::from(vec![
+            Span::styled(
+                ">",
+                Style::default().fg(state.theme.primary),
+            ),
+            Span::raw(format!(" {}", q)),
+        ]));
+    }
+
+    for row in &rows {
+        let content_w = if row.hint.is_some() {
+            inner_w.saturating_sub(3 + max_hint)
+        } else {
+            inner_w
         };
+        let label = truncate_to(&row.label, content_w);
+        let pad_spaces = content_w.saturating_sub(label.chars().count());
+        let mut spans: Vec<Span> = Vec::new();
+        let (label_style, row_bg) = if row.header {
+            (Style::default().fg(state.theme.accent).add_modifier(Modifier::BOLD), None)
+        } else if row.selected {
+            (Style::default().fg(state.theme.bg), Some(state.theme.primary))
+        } else {
+            (Style::default().fg(state.theme.fg), None)
+        };
+        spans.push(Span::styled(label, label_style.bg(row_bg.unwrap_or(state.theme.panel_bg))));
+        if let Some(hint) = row.hint {
+            spans.push(Span::styled(
+                format!("{}{}", " ".repeat(pad_spaces + 1), hint),
+                Style::default().fg(state.theme.muted).bg(row_bg.unwrap_or(state.theme.panel_bg)),
+            ));
+        }
+        body.push(Line::from(spans));
+    }
 
-    let height = (lines.len() as u16 + 4).min(area.height.saturating_sub(2)).max(5);
-    let width = area.width.saturating_sub(4).max(20).min(area.width);
+    // Actions row at the bottom (opencode-style dim key hints).
+    if let Some(actions) = dialog_actions(dialog) {
+        body.push(Line::from(Span::styled(
+            actions,
+            Style::default().fg(state.theme.muted),
+        )));
+    }
+
+    let height = (body.len() as u16 + 2).min(area.height.saturating_sub(2)).max(4);
     let x = area.width.saturating_sub(width) / 2;
-    let y = area.height.saturating_sub(height) / 2;
-    let dialog_area = Rect::new(x, y, width, height);
+    // Anchor ~25% from the top (opencode style), not center.
+    let y = (area.height.saturating_sub(height) / 4).max(1);
+    let panel = Rect::new(x, y, width, height);
 
-    f.render_widget(Clear, dialog_area);
-    let widget = Paragraph::new(lines)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(title)
-                .border_style(state.theme.dialog_border),
-        )
-        .wrap(Wrap { trim: false })
-        .style(Style::default().bg(state.theme.bg).fg(state.theme.fg));
-    f.render_widget(widget, dialog_area);
+    let widget = Paragraph::new(body)
+        .style(Style::default().bg(state.theme.panel_bg).fg(state.theme.fg));
+    f.render_widget(widget, panel);
+}
+
+fn dialog_rows(state: &AppState, dialog: &DialogKind) -> (String, Vec<DialogRow>, Option<String>) {
+    match dialog {
+        DialogKind::Palette => {
+            let commands = state.filtered_palette_commands();
+            let mut rows: Vec<DialogRow> = Vec::new();
+            let mut last_cat: Option<String> = None;
+            for (item_idx, cmd) in commands.iter().enumerate() {
+                if last_cat.as_deref() != Some(cmd.category.as_str()) {
+                    rows.push(DialogRow {
+                        label: cmd.category.clone(),
+                        hint: None,
+                        header: true,
+                        selected: false,
+                    });
+                    last_cat = Some(cmd.category.clone());
+                }
+                rows.push(DialogRow {
+                    label: cmd.title.clone(),
+                    hint: palette_hint(&cmd.id),
+                    header: false,
+                    selected: item_idx == state.palette_selected,
+                });
+            }
+            (String::from("Commands"), rows, Some(state.palette_filter.clone()))
+        }
+        DialogKind::SessionList => {
+            let items = session_rows(state);
+            (String::from("Sessions"), items, None)
+        }
+        DialogKind::ModelPicker => {
+            let items = picker_rows(state, "models");
+            (String::from("Models"), items, None)
+        }
+        DialogKind::RolePicker => {
+            let items = picker_rows(state, "roles");
+            (String::from("Roles"), items, None)
+        }
+        DialogKind::Help => (
+            String::from("Help"),
+            vec![
+                DialogRow { label: "Enter: submit  Shift+Enter: newline  Esc: abort/close".into(), hint: None, header: false, selected: false },
+                DialogRow { label: "Ctrl+P: palette  Ctrl+B: sidebar  Ctrl+N: home".into(), hint: None, header: false, selected: false },
+                DialogRow { label: "Ctrl+S: sessions  Ctrl+M: models  Ctrl+R: roles".into(), hint: None, header: false, selected: false },
+                DialogRow { label: ".help .model .role .session .exit".into(), hint: None, header: false, selected: false },
+            ],
+            None,
+        ),
+    }
+}
+
+/// Items for model/role pickers come from `state.sidebar_lines`.
+fn picker_rows(state: &AppState, _kind: &str) -> Vec<DialogRow> {
+    state
+        .sidebar_lines
+        .iter()
+        .enumerate()
+        .map(|(i, s)| DialogRow {
+            label: s.clone(),
+            hint: None,
+            header: false,
+            selected: i == state.palette_selected,
+        })
+        .collect()
+}
+
+/// Sessions grouped by recency (Today / Yesterday / Earlier), opencode style.
+fn session_rows(state: &AppState) -> Vec<DialogRow> {
+    let mut rows: Vec<DialogRow> = Vec::new();
+    let mut last_bucket: Option<&'static str> = None;
+    for (i, name) in state.sidebar_lines.iter().enumerate() {
+        let bucket = date_bucket(state.session_times.get(i).copied().flatten());
+        if Some(bucket) != last_bucket {
+            rows.push(DialogRow {
+                label: bucket.to_string(),
+                hint: None,
+                header: true,
+                selected: false,
+            });
+            last_bucket = Some(bucket);
+        }
+        rows.push(DialogRow {
+            label: name.clone(),
+            hint: None,
+            header: false,
+            selected: i == state.palette_selected,
+        });
+    }
+    rows
+}
+
+fn date_bucket(updated: Option<std::time::SystemTime>) -> &'static str {
+    let Some(updated) = updated else {
+        return "Earlier";
+    };
+    let Ok(age) = updated.elapsed() else {
+        return "Earlier";
+    };
+    let day = std::time::Duration::from_secs(24 * 60 * 60);
+    if age < day {
+        "Today"
+    } else if age < 2 * day {
+        "Yesterday"
+    } else {
+        "Earlier"
+    }
+}
+
+fn palette_hint(id: &str) -> Option<&'static str> {
+    match id {
+        "session.list" => Some("ctrl+s"),
+        "session.new" => Some("ctrl+n"),
+        "model.list" => Some("ctrl+m"),
+        "role.list" => Some("ctrl+r"),
+        "view.sidebar" => Some("ctrl+b"),
+        "help" => Some("ctrl+h"),
+        "quit" => Some("esc esc"),
+        _ => None,
+    }
+}
+
+/// Bottom action-hint row per dialog kind.
+fn dialog_actions(dialog: &DialogKind) -> Option<&'static str> {
+    match dialog {
+        DialogKind::Palette => None,
+        DialogKind::SessionList => Some("enter switch   ctrl+d delete   esc close"),
+        DialogKind::ModelPicker => Some("enter switch   esc close"),
+        DialogKind::RolePicker => Some("enter switch   esc close"),
+        DialogKind::Help => None,
+    }
+}
+
+fn truncate_to(text: &str, max: usize) -> String {
+    let count = text.chars().count();
+    if count <= max {
+        text.to_string()
+    } else {
+        let mut out: String = text.chars().take(max.saturating_sub(3)).collect();
+        out.push_str("...");
+        out
+    }
 }
 
 #[cfg(test)]

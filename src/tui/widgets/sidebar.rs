@@ -16,7 +16,7 @@ pub fn render_sidebar(f: &mut Frame, area: ratatui::layout::Rect, state: &AppSta
     let widget = Paragraph::new(lines)
         .block(
             Block::default()
-                .borders(Borders::ALL)
+                .borders(Borders::LEFT)
                 .title(" Sidebar ")
                 .border_style(state.theme.sidebar_border),
         )

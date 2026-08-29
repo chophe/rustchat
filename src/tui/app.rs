@@ -220,8 +220,7 @@ async fn handle_app_event(
                 }
                 KeyAction::OpenPalette => state.open_palette(),
                 KeyAction::OpenSessionList => {
-                    let sessions = backend.list_sessions()?;
-                    state.sidebar_lines = sessions.iter().map(|s| s.name.clone()).collect();
+                    refresh_sessions(state, backend);
                     state.open_dialog(DialogKind::SessionList);
                 }
                 KeyAction::OpenModelPicker => {
@@ -306,15 +305,29 @@ async fn handle_dialog_input(
         | Some(DialogKind::ModelPicker)
         | Some(DialogKind::RolePicker) => {
             let kind = state.dialog_stack.top().cloned();
-            match key.code {
-                KeyCode::Esc => state.close_dialog(),
-                KeyCode::Down => {
+            match (key.code, key.modifiers) {
+                (KeyCode::Esc, _) => state.close_dialog(),
+                (KeyCode::Char('d'), KeyModifiers::CONTROL) if kind == Some(DialogKind::SessionList) => {
+                    if let Some(item) = state.sidebar_lines.get(state.palette_selected).cloned() {
+                        match backend.delete_session(&item) {
+                            Ok(()) => {
+                                state.show_toast(format!("Deleted session: {item}"));
+                                state.palette_selected = state.palette_selected.saturating_sub(1);
+                                refresh_sessions(state, backend);
+                                state.suppress_rebuild = false;
+                                session::sync_from_backend(state, backend);
+                            }
+                            Err(err) => state.show_toast(format!("Delete failed: {err}")),
+                        }
+                    }
+                }
+                (KeyCode::Down, _) => {
                     if !state.sidebar_lines.is_empty() {
                         state.palette_selected =
                             (state.palette_selected + 1) % state.sidebar_lines.len();
                     }
                 }
-                KeyCode::Up => {
+                (KeyCode::Up, _) => {
                     if !state.sidebar_lines.is_empty() {
                         state.palette_selected = (state.palette_selected
                             + state.sidebar_lines.len()
@@ -322,7 +335,7 @@ async fn handle_dialog_input(
                             % state.sidebar_lines.len();
                     }
                 }
-                KeyCode::Enter => {
+                (KeyCode::Enter, _) => {
                     if let Some(item) = state.sidebar_lines.get(state.palette_selected) {
                         match kind {
                             Some(DialogKind::SessionList) => {
@@ -364,8 +377,7 @@ async fn execute_palette_command(
 ) -> Result<()> {
     match cmd.id.as_str() {
         "session.list" => {
-            let sessions = backend.list_sessions()?;
-            state.sidebar_lines = sessions.iter().map(|s| s.name.clone()).collect();
+            refresh_sessions(state, backend);
             state.open_dialog(DialogKind::SessionList);
         }
         "session.new" => home::render_home_hint(state),
@@ -399,6 +411,18 @@ fn handle_backend_event(
     }
     state.handle_backend(event);
     session::sync_from_backend(state, backend);
+}
+
+/// Reload the session list (names + timestamps) into dialog state.
+fn refresh_sessions(state: &mut AppState, backend: &mut Backend) {
+    match backend.list_sessions() {
+        Ok(sessions) => {
+            state.sidebar_lines = sessions.iter().map(|s| s.name.clone()).collect();
+            state.session_times = sessions.into_iter().map(|s| s.updated).collect();
+            state.palette_selected = 0;
+        }
+        Err(err) => state.show_toast(format!("Sessions: {err}")),
+    }
 }
 
 fn reset_textarea(state: &mut AppState) {

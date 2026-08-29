@@ -1,5 +1,5 @@
 use crate::tui::state::AppState;
-use crate::tui::widgets::{render_autocomplete, render_hints, render_keybar, render_status_bar};
+use crate::tui::widgets::{render_autocomplete, render_hints, render_status_bar};
 use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::Style,
@@ -22,47 +22,50 @@ pub enum FooterMode {
     Question { prompt: String, options: Vec<String> },
 }
 
-const SPINNER: [char; 4] = ['|', '/', '-', '\\'];
+/// Scanner-style spinner: diamond glyphs with an alpha-decay feel.
+const SPINNER: [char; 4] = ['◇', '◈', '◆', '◈'];
 
-/// Rows inside the fixed footer region: status / prompt / hints / keybar.
+/// Rows inside the fixed footer region: prompt / hints / status.
 pub fn render_footer(f: &mut Frame, area: ratatui::layout::Rect, state: &AppState) {
     let rows = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1),
-            Constraint::Length(3),
+            Constraint::Length(2),
             Constraint::Length(1),
             Constraint::Length(1),
         ])
         .split(area);
 
-    render_status_bar(f, rows[0], state);
-
     match &state.footer_mode {
-        FooterMode::Prompt => render_prompt(f, rows[1], state),
-        FooterMode::Streaming => render_streaming(f, rows[1], state),
-        FooterMode::Permission { prompt } => render_permission(f, rows[1], state, prompt),
+        FooterMode::Prompt => render_prompt(f, rows[0], state),
+        FooterMode::Streaming => render_streaming(f, rows[0], state),
+        FooterMode::Permission { prompt } => render_permission(f, rows[0], state, prompt),
         FooterMode::Question { prompt, options } => {
-            render_question(f, rows[1], state, prompt, options)
+            render_question(f, rows[0], state, prompt, options)
         }
     }
 
-    render_hints(f, rows[2], state);
-    render_keybar(f, rows[3], state);
+    render_hints(f, rows[1], state);
+    render_status_bar(f, rows[2], state);
 
     if state.autocomplete.is_open() {
         render_autocomplete(f, area, state);
     }
 }
 
+/// SplitBorder: vertical rails only (no top/bottom) for the opencode look.
+fn rail_block(state: &AppState, title: &str) -> Block<'static> {
+    Block::default()
+        .borders(Borders::LEFT | Borders::RIGHT)
+        .border_type(ratatui::widgets::BorderType::Plain)
+        .title(Line::from(format!(" {title} ")).style(Style::default().fg(state.theme.muted)))
+        .border_style(state.theme.prompt_border)
+        .style(Style::default().bg(state.theme.panel_bg))
+}
+
 fn render_prompt(f: &mut Frame, area: ratatui::layout::Rect, state: &AppState) {
     let mut textarea = state.textarea.clone();
-    textarea.set_block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title(" Prompt ")
-            .border_style(state.theme.prompt_border),
-    );
+    textarea.set_block(rail_block(state, "Prompt"));
     f.render_widget(&textarea, area);
 }
 
@@ -76,21 +79,13 @@ fn render_streaming(f: &mut Frame, area: ratatui::layout::Rect, state: &AppState
     let line = Line::from(vec![
         Span::styled(
             format!("{spinner} "),
-            Style::default().fg(state.theme.accent),
+            Style::default().fg(state.theme.primary),
         ),
-        Span::styled(
-            status,
-            Style::default().fg(state.theme.fg).bg(state.theme.bg),
-        ),
+        Span::styled(status, Style::default().fg(state.theme.fg)),
     ]);
     let widget = Paragraph::new(line)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" Response ")
-                .border_style(state.theme.prompt_border),
-        )
-        .style(Style::default().bg(state.theme.bg).fg(state.theme.fg));
+        .block(rail_block(state, "Response"))
+        .style(Style::default().bg(state.theme.panel_bg).fg(state.theme.fg));
     f.render_widget(widget, area);
 }
 
@@ -99,7 +94,7 @@ fn render_permission(f: &mut Frame, area: ratatui::layout::Rect, state: &AppStat
         f,
         area,
         state,
-        " Permission ",
+        "Permission",
         &[Span::raw(prompt.to_string()), Span::raw("  (y/n)")],
     );
 }
@@ -115,7 +110,7 @@ fn render_question(
     for (i, option) in options.iter().enumerate() {
         spans.push(Span::raw(format!("  {} {}", i + 1, option)));
     }
-    render_prompt_block(f, area, state, " Question ", &spans);
+    render_prompt_block(f, area, state, "Question", &spans);
 }
 
 fn render_prompt_block(
@@ -126,13 +121,8 @@ fn render_prompt_block(
     spans: &[Span<'static>],
 ) {
     let widget = Paragraph::new(Line::from(spans.to_vec()))
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(title)
-                .border_style(state.theme.prompt_border),
-        )
-        .style(Style::default().bg(state.theme.bg).fg(state.theme.fg));
+        .block(rail_block(state, title))
+        .style(Style::default().bg(state.theme.panel_bg).fg(state.theme.fg));
     f.render_widget(widget, area);
 }
 

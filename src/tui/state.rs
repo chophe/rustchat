@@ -58,6 +58,9 @@ pub struct AppState {
     pub header_right: String,
     pub sidebar_open: bool,
     pub sidebar_lines: Vec<String>,
+    /// Last-modified timestamps parallel to `sidebar_lines` while the session
+    /// list dialog is open (for date grouping).
+    pub session_times: Vec<Option<std::time::SystemTime>>,
     pub dialog_stack: DialogStack,
     pub palette_filter: String,
     pub palette_selected: usize,
@@ -74,6 +77,8 @@ pub struct AppState {
     /// After an abort, do not let `sync_from_backend` clobber the locally
     /// preserved partial response until the user takes a fresh action.
     pub suppress_rebuild: bool,
+    /// When the current turn started (for the duration meta line).
+    stream_started: Option<Instant>,
     /// Tick counter used for animations / spinners.
     pub frame: u64,
 }
@@ -97,6 +102,7 @@ impl AppState {
             header_left: String::new(),
             header_right: String::new(),
             sidebar_lines: vec![],
+            session_times: vec![],
             dialog_stack: DialogStack::default(),
             palette_filter: String::new(),
             palette_selected: 0,
@@ -109,6 +115,7 @@ impl AppState {
             interrupt_deadline: None,
             aborting: false,
             suppress_rebuild: false,
+            stream_started: None,
             frame: 0,
         }
     }
@@ -129,7 +136,14 @@ impl AppState {
     }
 
     pub fn finish_stream(&mut self, text: String) {
+        let meta = self
+            .stream_started
+            .take()
+            .map(|t| format!("✦ {:.1}s", t.elapsed().as_secs_f32()));
         self.scrollback.finish_stream(&self.theme, text);
+        if let Some(meta) = meta {
+            self.scrollback.append_meta(&self.theme, &meta);
+        }
         if self.auto_scroll {
             self.scroll_to_bottom();
         }
@@ -229,6 +243,7 @@ impl AppState {
         self.status = "thinking...".into();
         self.suppress_rebuild = false;
         self.aborting = false;
+        self.stream_started = Some(Instant::now());
     }
 
     /// Called when the user confirms an abort. The partial response is

@@ -13,12 +13,16 @@ use tokio::sync::mpsc::UnboundedReceiver;
 #[derive(Debug, Clone)]
 pub struct SessionMeta {
     pub name: String,
+    /// Last-modified time of the session file (for date grouping in the UI).
+    pub updated: Option<std::time::SystemTime>,
 }
 
 #[async_trait]
 pub trait ChatBackend: Send {
     fn list_sessions(&self) -> Result<Vec<SessionMeta>>;
     fn load_session(&mut self, name: &str) -> Result<()>;
+    /// Delete a persisted session by name.
+    fn delete_session(&mut self, name: &str) -> Result<()>;
     async fn send_message(&mut self, text: &str) -> Result<()>;
     fn subscribe(&self) -> UnboundedReceiver<BackendEvent>;
     fn abort(&self);
@@ -51,6 +55,13 @@ impl ChatBackend for Backend {
         match self {
             Self::Embedded(b) => b.load_session(name),
             Self::Remote(b) => b.load_session(name),
+        }
+    }
+
+    fn delete_session(&mut self, name: &str) -> Result<()> {
+        match self {
+            Self::Embedded(b) => b.delete_session(name),
+            Self::Remote(b) => b.delete_session(name),
         }
     }
 

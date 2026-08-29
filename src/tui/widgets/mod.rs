@@ -1,6 +1,5 @@
 mod autocomplete;
 mod dialog;
-mod header;
 mod hints;
 mod message_list;
 mod sidebar;
@@ -9,8 +8,7 @@ mod toast;
 
 pub use autocomplete::{render_autocomplete, AutocompleteState};
 pub use dialog::{render_dialog, DialogKind, DialogStack, PaletteCommand};
-pub use header::render_header;
-pub use hints::{render_hints, render_keybar};
+pub use hints::render_hints;
 pub use message_list::render_messages;
 pub use sidebar::render_sidebar;
 pub use status_bar::render_status_bar;
@@ -20,8 +18,8 @@ use crate::tui::footer::render_footer;
 use crate::tui::state::AppState;
 use ratatui::Frame;
 
-/// Footer region height: status(1) + prompt(3) + hints(1) + keybar(1).
-const FOOTER_ROWS: u16 = 6;
+/// Footer region height (opencode-style compact footer): prompt(2) + hints(1) + status(1).
+const FOOTER_ROWS: u16 = 4;
 
 pub fn render(f: &mut Frame, state: &mut AppState) {
     let area = f.area();
@@ -44,15 +42,13 @@ pub fn render(f: &mut Frame, state: &mut AppState) {
     let inner = ratatui::layout::Layout::default()
         .direction(ratatui::layout::Direction::Vertical)
         .constraints([
-            ratatui::layout::Constraint::Length(1),
             ratatui::layout::Constraint::Min(3),
             ratatui::layout::Constraint::Length(FOOTER_ROWS),
         ])
         .split(main);
 
-    render_header(f, inner[0], &*state);
-    render_messages(f, inner[1], state);
-    render_footer(f, inner[2], &*state);
+    render_messages(f, inner[0], state);
+    render_footer(f, inner[1], &*state);
 
     if state.sidebar_open {
         if let Some(sidebar_area) = chunks.get(1) {

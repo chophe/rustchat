@@ -125,6 +125,17 @@ impl Scrollback {
         self.dirty = true;
     }
 
+    /// Attach a dim trailing meta line (e.g. "✦ 2.3s") to the last entry.
+    /// Applied on the next rebuild, so it survives re-wraps.
+    pub fn append_meta(&mut self, _theme: &Theme, text: &str) {
+        if let Some(last) = self.entries.last_mut() {
+            if !last.streaming {
+                last.meta = Some(text.to_string());
+                self.dirty = true;
+            }
+        }
+    }
+
     /// Cheap content check against a backend snapshot. Used to skip the
     /// O(history) line/markdown rebuild when nothing actually changed.
     pub fn same_as(&self, messages: &[MessageView]) -> bool {
@@ -160,7 +171,8 @@ impl Scrollback {
     fn rebuild_all(&mut self, theme: &Theme, width: usize) {
         let mut entries = std::mem::take(&mut self.entries);
         let mut total = 0usize;
-        for entry in entries.iter_mut() {
+        let last_idx = entries.len().saturating_sub(1);
+        for (idx, entry) in entries.iter_mut().enumerate() {
             entry.lines.clear();
             entry.pending.clear();
             entry.partial_lines = 0;
@@ -185,6 +197,13 @@ impl Scrollback {
                     // Streaming body lines are produced by flush_pending below
                     // so that only the un-committed tail is ever re-wrapped.
                     entry.pending = entry.text.clone();
+                } else if entry.role == MessageRole::User {
+                    for raw in entry.text.split('\n') {
+                        for wrapped in wrap_plain(raw, width) {
+                            entry.lines.push(rail_body_line(theme, wrapped));
+                            total += 1;
+                        }
+                    }
                 } else {
                     for raw in entry.text.split('\n') {
                         for wrapped in wrap_plain(raw, width) {
@@ -195,6 +214,15 @@ impl Scrollback {
                 }
             }
             entry.push_tool_lines(theme, &mut total);
+            if let Some(meta) = &entry.meta {
+                entry.lines.push(meta_line(theme, meta.clone()));
+                total += 1;
+            }
+            // Blank-row rhythm between entries (opencode transcript style).
+            if idx != last_idx {
+                entry.lines.push(Line::from(""));
+                total += 1;
+            }
         }
         if let Some(last) = entries.last_mut() {
             if last.streaming {
@@ -258,6 +286,8 @@ struct Entry {
     lines: Vec<Line<'static>>,
     pending: String,
     partial_lines: usize,
+    /// Trailing dim meta line (e.g. "✦ 2.3s") rendered after the body.
+    meta: Option<String>,
 }
 
 impl Entry {
@@ -275,20 +305,29 @@ impl Entry {
             lines: vec![],
             pending: String::new(),
             partial_lines: 0,
+            meta: None,
         }
     }
 
     fn header_line(&self, theme: &Theme) -> Line<'static> {
+        let rail = Style::default().fg(theme.border).bg(theme.bg);
+        // opencode style: user messages sit in a left-rail block.
+        if self.role == MessageRole::User {
+            return Line::from(vec![
+                Span::styled("│ ", rail),
+                Span::styled("user".to_string(), theme.user_label.bg(theme.bg)),
+            ]);
+        }
         let style = match self.role {
             MessageRole::User => theme.user_label,
             MessageRole::Assistant => theme.assistant_label,
             MessageRole::System | MessageRole::Tool => theme.system_label,
         };
-        let mut spans = vec![Span::styled(format!("[{}]", self.label()), style)];
+        let mut spans = vec![Span::styled(format!("[{}]", self.label()), style.bg(theme.bg))];
         if self.streaming {
             spans.push(Span::styled(
-                " ●",
-                Style::default().fg(theme.accent),
+                " ●".to_string(),
+                Style::default().fg(theme.primary).bg(theme.bg),
             ));
         }
         Line::from(spans).style(Style::default().bg(theme.bg))
@@ -361,6 +400,22 @@ impl Entry {
 
 fn body_line(theme: &Theme, text: String) -> Line<'static> {
     Line::from(text).style(Style::default().bg(theme.bg).fg(theme.fg))
+}
+
+/// Body line inside a user rail-box: the rail char, then the wrapped text.
+fn rail_body_line(theme: &Theme, text: String) -> Line<'static> {
+    Line::from(vec![
+        Span::styled("│ ", Style::default().fg(theme.border).bg(theme.bg)),
+        Span::styled(text, Style::default().bg(theme.bg).fg(theme.fg)),
+    ])
+}
+
+/// Dim trailing meta line under an entry (e.g. "✦ 2.3s").
+fn meta_line(theme: &Theme, text: String) -> Line<'static> {
+    Line::from(Span::styled(
+        format!("  {text}"),
+        Style::default().fg(theme.muted).bg(theme.bg),
+    ))
 }
 
 /// Wrap a single raw text line at `width`, preserving leading indentation and
